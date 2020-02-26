@@ -39,7 +39,7 @@ module LMDB
     #      db['b'] = 1234    #=> 1234
     #      db['a']           #=> 'b'
     def []=(key, value)
-      put(key, value)
+      put key, value
       value
     end
 

@@ -2,7 +2,7 @@
 require 'helper'
 
 describe LMDB do
-  let(:env) { LMDB.new(path) }
+  let(:env) { LMDB.new(path, mapsize: 2**20) }
   after     { env.close rescue nil }
 
   let(:db)  { env.database }
@@ -192,8 +192,10 @@ describe LMDB do
 
     it 'should support named databases' do
       main = env.database
-      db1 = env.database('db1', create: true)
-      db2 = env.database('db2', create: true)
+      # funnily it complains in 2.7 unless i do this
+      dbopts = { create: true }
+      db1 = env.database 'db1', create: true # actually no it doesn't wtf
+      db2 = env.database 'db2', **dbopts
 
       main['key'] = '1'
       db1['key'] = '2'
@@ -359,7 +361,8 @@ describe LMDB do
       dupdb.dupsort?.should == true
       dupdb.dupfixed?.should == false
 
-      dupdb.put 'key1', 'value1'
+      # add this so it complains in 2.7
+      dupdb.put 'key1', 'value1', nodupdata: false
       dupdb.put 'key1', 'value2'
       dupdb.put 'key2', 'value3'
       dupdb.cursor do |c|
