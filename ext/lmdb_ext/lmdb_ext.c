@@ -486,12 +486,13 @@ static int environment_options(VALUE key, VALUE value, EnvironmentOptions* optio
  */
 static VALUE environment_new(int argc, VALUE *argv, VALUE klass) {
         VALUE path, option_hash;
-/*
+
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, "1:", &path, &option_hash);
-#else*/
+        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                        argc, argv, "1:", &path, &option_hash);
+#else
         rb_scan_args(argc, argv, "1:", &path, &option_hash);
-//#endif
+#endif
 
         EnvironmentOptions options = {
                 .flags = MDB_NOTLS,
@@ -767,7 +768,8 @@ static VALUE environment_database(int argc, VALUE *argv, VALUE self) {
 
         VALUE name, option_hash;
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, "01:", &name, &option_hash);
+        rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS,
+                        argc, argv, "01:", &name, &option_hash);
 #else
         rb_scan_args(argc, argv, "01:", &name, &option_hash);
 #endif
@@ -951,12 +953,13 @@ static VALUE database_put(int argc, VALUE *argv, VALUE self) {
         if (!active_txn(database->env))
                 return call_with_transaction(database->env, self, "put", argc, argv, 0);
 
-        VALUE vkey, vval, option_hash;
-/*#ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_PASS_CALLED_KEYWORDS, argc, argv, "2:", &vkey, &vval, &option_hash);
-#else*/
-        rb_scan_args(argc, argv, "2:", &vkey, &vval, &option_hash);
-//#endif
+        VALUE vkey, vval, option_hash = Qnil;
+#ifdef RB_SCAN_ARGS_KEYWORDS
+        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                        argc, argv, "20:", &vkey, &vval, &option_hash);
+#else
+        rb_scan_args(argc, argv, "20:", &vkey, &vval, &option_hash);
+#endif
 
         int flags = 0;
         if (!NIL_P(option_hash))
@@ -1331,11 +1334,12 @@ static VALUE cursor_put(int argc, VALUE* argv, VALUE self) {
         CURSOR(self, cursor);
 
         VALUE vkey, vval, option_hash;
-/*#ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, "2:", &vkey, &vval, &option_hash);
-#else*/
+#ifdef RB_SCAN_ARGS_KEYWORDS
+        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                        argc, argv, "2:", &vkey, &vval, &option_hash);
+#else
         rb_scan_args(argc, argv, "2:", &vkey, &vval, &option_hash);
-//#endif
+#endif
 
         int flags = 0;
         if (!NIL_P(option_hash))
@@ -1372,11 +1376,12 @@ static VALUE cursor_delete(int argc, VALUE *argv, VALUE self) {
         CURSOR(self, cursor);
 
         VALUE option_hash;
-/*#ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &option_hash);
-#else*/
+#ifdef RB_SCAN_ARGS_KEYWORDS
+        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                        argc, argv, ":", &option_hash);
+#else
         rb_scan_args(argc, argv, ":", &option_hash);
-//#endif
+#endif
 
         int flags = 0;
         if (!NIL_P(option_hash))
