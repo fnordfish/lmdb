@@ -38,8 +38,11 @@ static void check(int code) {
 
 static void transaction_free(Transaction* transaction) {
         if (transaction->txn) {
-                rb_warn("Memory leak - Garbage collecting active transaction");
-                // mdb_txn_abort(transaction->txn);
+          //int id = (int)mdb_txn_id(transaction->txn);
+          //rb_warn(sprintf("Memory leak: Garbage collecting active transaction %d", id));
+          rb_warn("Memory leak: Garbage collecting active transaction");
+          // transaction_abort(transaction);
+          // mdb_txn_abort(transaction->txn);
         }
         free(transaction);
 }
@@ -120,12 +123,18 @@ static VALUE transaction_env(VALUE self) {
         TRANSACTION(self, transaction);
         return transaction->env;
 }
-/*
+
+/**
+ * @overload readonly?
+ *   @note This predicate is considered *unstable*; do not get used to it.
+ *   @return [false,true] whether the transaction is read-only.
+ */
 static VALUE transaction_is_readonly(VALUE self) {
   TRANSACTION(self, transaction);
-  MDB_txn* txn = transaction->txn;
-  return (txn->mt_flags & MDB_RDONLY) ? Qtrue : Qfalse;
-}*/
+  //MDB_txn* txn = transaction->txn;
+  return (transaction->flags & MDB_RDONLY) ? Qtrue : Qfalse;
+}
+
 
 static void transaction_finish(VALUE self, int commit) {
         TRANSACTION(self, transaction);
@@ -237,9 +246,9 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
                 if (txn_args.stop || !txn) {
                         // !txn is when rb_thread_call_without_gvl2
                         // returns before calling txn_begin
-                        if (txn) {
-                                mdb_txn_abort(txn);
-                        }
+                        if (txn) mdb_txn_abort(txn);
+
+                        //rb_warn("got here lol");
                         rb_thread_check_ints();
                         goto retry; // in what cases do we get here?
                 }
@@ -252,6 +261,7 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
         transaction->parent = environment_active_txn(venv);
         transaction->env = venv;
         transaction->txn = txn;
+        transaction->flags = flags;
         transaction->thread = rb_thread_current();
         transaction->cursors = rb_ary_new();
         environment_set_active_txn(venv, transaction->thread, vtxn);
@@ -260,6 +270,7 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
         VALUE ret = rb_protect(fn, NIL_P(arg) ? vtxn : arg, &exception);
 
         if (exception) {
+          //rb_warn("lol got exception");
                 if (vtxn == environment_active_txn(venv))
                         transaction_abort(vtxn);
                 rb_jump_tag(exception);
@@ -1268,12 +1279,20 @@ static VALUE cursor_next_range(VALUE self, VALUE upper_bound_key) {
 static VALUE cursor_set_range(VALUE self, VALUE vkey) {
         CURSOR(self, cursor);
         MDB_val key, value;
+        int ret;
 
         key.mv_size = RSTRING_LEN(vkey);
         key.mv_data = StringValuePtr(vkey);
 
-        check(mdb_cursor_get(cursor->cur, &key, &value, MDB_SET_RANGE));
-        return rb_assoc_new(rb_str_new(key.mv_data, key.mv_size), rb_str_new(value.mv_data, value.mv_size));
+        ret = mdb_cursor_get(cursor->cur, &key, &value, MDB_SET_RANGE);
+
+        /* not sure why we were letting this throw an exception */
+        if (ret == MDB_NOTFOUND) return Qnil;
+
+        check(ret);
+
+        return rb_assoc_new(rb_str_new(key.mv_data, key.mv_size),
+                            rb_str_new(value.mv_data, value.mv_size));
 }
 
 /**
@@ -1584,7 +1603,7 @@ void Init_lmdb_ext() {
         rb_define_method(cTransaction, "commit", transaction_commit, 0);
         rb_define_method(cTransaction, "abort", transaction_abort, 0);
         rb_define_method(cTransaction, "env", transaction_env, 0);
-        /*rb_define_method(cTransaction, "readonly?", transaction_is_readonly, 0);*/
+        rb_define_method(cTransaction, "readonly?", transaction_is_readonly, 0);
 
         /**
          * Document-class: LMDB::Cursor

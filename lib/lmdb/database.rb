@@ -11,7 +11,8 @@ module LMDB
     #      puts "at #{key}: #{value}"
     #    end
     def each
-      maybe_txn true do
+      # maybe_txn true do
+      env.transaction do
         cursor do |c|
           while i = c.next
             yield(i)
@@ -55,7 +56,8 @@ module LMDB
     # @return [Enumerator] in lieu of a block.
     def each_key(&block)
       return enum_for :each_key unless block_given?
-      maybe_txn true do
+      # maybe_txn true do
+      env.transaction do
         cursor do |c|
           while (rec = c.next true)
             yield rec.first
@@ -79,7 +81,8 @@ module LMDB
         return
       end
 
-      maybe_txn true do |t|
+      #maybe_txn true do
+      env.transaction do
         cursor do |c|
           method = :set
           while rec = c.send(method, key)
@@ -96,7 +99,8 @@ module LMDB
     # @return [Integer] The number of entries under the key.
     def cardinality(key)
       ret = 0
-      maybe_txn true do |t|
+      maybe_txn true do
+      # env.transaction do
         if get key
           if dupsort?
             cursor do |c|
@@ -120,7 +124,8 @@ module LMDB
 
       ret = false
       # read-only txn was having trouble being nested inside a read-write
-      maybe_txn true do |t|
+      #maybe_txn true do
+      env.transaction do
         cursor { |c| ret = !!c.set(key, value) }
       end
       ret

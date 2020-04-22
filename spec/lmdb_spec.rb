@@ -361,7 +361,7 @@ describe LMDB do
       dupdb.dupsort?.should == true
       dupdb.dupfixed?.should == false
 
-      # add this so it complains in 2.7
+      # add the no-op keyword to trigger a complaint from ruby 2.7
       dupdb.put 'key1', 'value1', nodupdata: false
       dupdb.put 'key1', 'value2'
       dupdb.put 'key2', 'value3'

@@ -53,6 +53,7 @@ typedef struct {
         VALUE    thread;
         VALUE    cursors;
         MDB_txn* txn;
+        unsigned int flags;
 } Transaction;
 
 typedef struct {
