@@ -50,6 +50,7 @@
 typedef struct {
         VALUE    env;
         VALUE    parent;
+        VALUE    child;
         VALUE    thread;
         VALUE    cursors;
         MDB_txn* txn;
@@ -58,8 +59,9 @@ typedef struct {
 
 typedef struct {
         MDB_env* env;
-        VALUE    thread_txn_hash;
-        VALUE    txn_thread_hash;
+        VALUE    thread_txn_hash; /* transaction -> thread id */
+        VALUE    txn_thread_hash; /* thread id   -> transaction */
+        VALUE    rw_txn_thread;   /* the thread with the rw transaction */
 } Environment;
 
 typedef struct {

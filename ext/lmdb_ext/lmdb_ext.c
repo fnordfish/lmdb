@@ -140,10 +140,11 @@ static void transaction_finish(VALUE self, int commit) {
         TRANSACTION(self, transaction);
 
         if (!transaction->txn)
-                rb_raise(cError, "Transaction is terminated");
+                rb_raise(cError, "Transaction is already terminated");
 
         if (transaction->thread != rb_thread_current())
-                rb_raise(cError, "Wrong thread");
+          rb_raise(cError, "The thread closing the transaction "
+                   "is not the one that opened it");
 
         // Check nesting
         VALUE p = environment_active_txn(transaction->env);
@@ -219,65 +220,117 @@ static void stop_txn_begin(void *arg)
         txn_args->stop = 1;
 }
 
+/**
+ * This is the code that opens transactions. Read-write transactions
+ * have to be called outside the GVL because they will block without
+ *
+ *
+ * Here is the basic problem with LMDB transactions:
+ *
+ * - There can only be one read-write transaction per LMDB
+ *   ENVIRONMENT, not process, not thread.
+ *
+ * - Read-write transactions can nest.
+ *
+ * - There can only be one active transaction per thread.
+ *
+ * - Every thread can have an active read-ONLY transaction, but only one.
+ *
+ * - This is because read-only transactions canNOT nest (it is
+ *   meaningless to have a nested read-only transaction)
+ *
+ * - Furthermore it is an error to open a read-only transaction under
+ *   a read-write transaction.
+ *
+ * - Same goes for opening a read-write transaction in the same thread
+ *   as an active read-only transaction.
+ *
+ * Nevertheless, the downstream Ruby user may not be able to
+ * completely control calls to env.transaction (e.g. if they are
+ * wrapping a transaction around a proc or lambda that happens to
+ * contain its own transaction), plus every call in LMDB needs to be
+ * implicitly wrapped in a transaction anyway.
+ *
+ * What this means is that we will, first, have to keep explicit track
+ * of the read-write transaction, if one exists. Second, we will have
+ * to simulate nesting for read-only transactions, so the behaviour in
+ * Ruby is the same as a read-write transaction.
+ *
+ */
+
 static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flags) {
-        ENVIRONMENT(venv, environment);
+    ENVIRONMENT(venv, environment);
 
-        MDB_txn* txn;
-        TxnArgs txn_args;
+    MDB_txn* txn;
+    TxnArgs txn_args;
 
-    retry:
-        txn = NULL;
+    VALUE vparent = environment_active_txn(venv);
 
-        txn_args.env = environment->env;
-        txn_args.parent = active_txn(venv);
-        txn_args.flags = flags;
-        txn_args.htxn = &txn;
-        txn_args.result = 0;
-        txn_args.stop = 0;
+ retry:
+    txn = NULL;
 
-        if (flags & MDB_RDONLY) {
-                call_txn_begin(&txn_args);
-        }
-        else {
-                CALL_WITHOUT_GVL(
-                    call_txn_begin, &txn_args,
-                    stop_txn_begin, &txn_args);
+    txn_args.env    = environment->env;
+    txn_args.parent = active_txn(venv);
+    txn_args.flags  = flags;
+    txn_args.htxn   = &txn;
+    txn_args.result = 0;
+    txn_args.stop   = 0;
 
-                if (txn_args.stop || !txn) {
-                        // !txn is when rb_thread_call_without_gvl2
-                        // returns before calling txn_begin
-                        if (txn) mdb_txn_abort(txn);
-
-                        //rb_warn("got here lol");
-                        rb_thread_check_ints();
-                        goto retry; // in what cases do we get here?
-                }
+    if (flags & MDB_RDONLY) {
+        if (vparent && ((size_t*)vparent)->flags & MDB_RDONLY)
+            // this is a no-op: put the same actual transaction in a
+            // different wrapper struct
+            txn = txn_args.parent;
+        else
+            // this will return an error if the parent transaction is
+            // read-write, so we don't need to handle the case explicitly
+            call_txn_begin(&txn_args);
+    }
+    else {
+        if (vparent) {
+            venv->rw_txn_thread
         }
 
-        check(txn_args.result);
+        CALL_WITHOUT_GVL(call_txn_begin, &txn_args, stop_txn_begin, &txn_args);
 
-        Transaction* transaction;
-        VALUE vtxn = Data_Make_Struct(cTransaction, Transaction, transaction_mark, transaction_free, transaction);
-        transaction->parent = environment_active_txn(venv);
-        transaction->env = venv;
-        transaction->txn = txn;
-        transaction->flags = flags;
-        transaction->thread = rb_thread_current();
-        transaction->cursors = rb_ary_new();
-        environment_set_active_txn(venv, transaction->thread, vtxn);
+        if (txn_args.stop || !txn) {
+            // !txn is when rb_thread_call_without_gvl2
+            // returns before calling txn_begin
+            if (txn) txn_args.result = mdb_txn_abort(txn);
 
-        int exception;
-        VALUE ret = rb_protect(fn, NIL_P(arg) ? vtxn : arg, &exception);
-
-        if (exception) {
-          //rb_warn("lol got exception");
-                if (vtxn == environment_active_txn(venv))
-                        transaction_abort(vtxn);
-                rb_jump_tag(exception);
+            //rb_warn("got here lol");
+            rb_thread_check_ints();
+            goto retry; // in what cases do we get here?
         }
+    }
+
+    // this will raise unless result is zero
+    check(txn_args.result);
+
+    Transaction* transaction;
+    VALUE vtxn = Data_Make_Struct(cTransaction, Transaction, transaction_mark, transaction_free, transaction);
+    transaction->parent  = vparent;
+    transaction->env     = venv;
+    transaction->txn     = txn;
+    transaction->flags   = flags;
+    transaction->thread  = rb_thread_current();
+    transaction->cursors = rb_ary_new();
+
+    environment_set_active_txn(venv, transaction->thread, vtxn);
+
+    // now we run the function in the transaction
+    int exception;
+    VALUE ret = rb_protect(fn, NIL_P(arg) ? vtxn : arg, &exception);
+
+    if (exception) {
+        //rb_warn("lol got exception");
         if (vtxn == environment_active_txn(venv))
-                transaction_commit(vtxn);
-        return ret;
+            transaction_abort(vtxn);
+        rb_jump_tag(exception);
+    }
+    if (vtxn == environment_active_txn(venv))
+        transaction_commit(vtxn);
+    return ret;
 }
 
 static void environment_check(Environment* environment) {
@@ -674,7 +727,7 @@ static MDB_txn* active_txn(VALUE self) {
                 return 0;
         TRANSACTION(vtxn, transaction);
         if (!transaction->txn)
-                rb_raise(cError, "Transaction is terminated");
+                rb_raise(cError, "Transaction is already terminated");
         if (transaction->thread != rb_thread_current())
                 rb_raise(cError, "Wrong thread");
         return transaction->txn;
