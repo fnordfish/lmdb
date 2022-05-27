@@ -7,11 +7,20 @@ PRJ = File.basename(GEMSPEC, ".gemspec")
 require 'bundler/setup'
 require 'rspec/core/rake_task'
 require 'rake/extensiontask'
+require 'ruby_memcheck'
+require 'ruby_memcheck/rspec/rake_task'
+
+RubyMemcheck.config(binary_name: 'lmdb_ext')
 
 RSpec::Core::RakeTask.new :spec
 Rake::ExtensionTask.new :lmdb_ext
 
+
 task :default => [:compile, :spec]
+
+namespace :spec do
+  RubyMemcheck::RSpec::RakeTask.new(valgrind: :compile)
+end
 
 def version
   @version ||= begin

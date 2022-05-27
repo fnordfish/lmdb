@@ -2,6 +2,9 @@ require 'lmdb'
 require 'rspec'
 require 'fileutils'
 
+# for valgrind
+at_exit { GC.start }
+
 SPEC_ROOT = File.dirname(__FILE__)
 TEMP_ROOT = File.join(SPEC_ROOT, 'tmp')
 

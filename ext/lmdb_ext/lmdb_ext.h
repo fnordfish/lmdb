@@ -47,20 +47,34 @@
         Data_Get_Struct(var, Cursor, var_cur);  \
         cursor_check(var_cur)
 
+/*
+  hey yo if you can convince hyc to add a function like
+  mdb_txn_get_flags or even mdb_txn_is_rdonly, you could probably get
+  rid of these wrapper structs and a lot of complexity, cause that is
+  literally the only reason why they're needed
+
+  actually no we would also need to know when a txn has a child and
+  there is also no mdb_txn_get_child or whatever
+*/
+
 typedef struct {
         VALUE    env;
-        VALUE    parent;
-        VALUE    child;
+        VALUE    parent; // ignored for ro threads
+        VALUE    child;  // ditto
         VALUE    thread;
         VALUE    cursors;
         MDB_txn* txn;
         unsigned int flags;
 } Transaction;
 
+// we have an extra field `rw_txn_thread` here that acts as the
+// registry for the single read-write transaction. if it's populated,
+// that's the one
+
 typedef struct {
         MDB_env* env;
-        VALUE    thread_txn_hash; /* transaction -> thread id */
-        VALUE    txn_thread_hash; /* thread id   -> transaction */
+        VALUE    thread_txn_hash; /* transaction -> thread  */
+        VALUE    txn_thread_hash; /* thread      -> transaction */
         VALUE    rw_txn_thread;   /* the thread with the rw transaction */
 } Environment;
 

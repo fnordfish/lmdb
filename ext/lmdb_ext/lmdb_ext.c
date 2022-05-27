@@ -26,6 +26,7 @@ static void check(int code) {
 
         const char* err = mdb_strerror(code);
         const char* sep = strchr(err, ':');
+        // increment the offset by two in case there is a colon (plus space)
         if (sep)
                 err = sep + 2;
 
@@ -37,7 +38,7 @@ static void check(int code) {
 }
 
 static void transaction_free(Transaction* transaction) {
-        if (transaction->txn) {
+        if (transaction->txn && !NIL_P(transaction->txn)) {
           //int id = (int)mdb_txn_id(transaction->txn);
           //rb_warn(sprintf("Memory leak: Garbage collecting active transaction %d", id));
           rb_warn("Memory leak: Garbage collecting active transaction");
@@ -49,6 +50,7 @@ static void transaction_free(Transaction* transaction) {
 
 static void transaction_mark(Transaction* transaction) {
         rb_gc_mark(transaction->parent);
+        rb_gc_mark(transaction->child);
         rb_gc_mark(transaction->env);
         rb_gc_mark(transaction->cursors);
 }
@@ -130,56 +132,81 @@ static VALUE transaction_env(VALUE self) {
  *   @return [false,true] whether the transaction is read-only.
  */
 static VALUE transaction_is_readonly(VALUE self) {
-  TRANSACTION(self, transaction);
-  //MDB_txn* txn = transaction->txn;
-  return (transaction->flags & MDB_RDONLY) ? Qtrue : Qfalse;
+    TRANSACTION(self, transaction);
+    //MDB_txn* txn = transaction->txn;
+    return (transaction->flags & MDB_RDONLY) ? Qtrue : Qfalse;
 }
 
 
 static void transaction_finish(VALUE self, int commit) {
-        TRANSACTION(self, transaction);
+    TRANSACTION(self, transaction);
 
-        if (!transaction->txn)
-                rb_raise(cError, "Transaction is already terminated");
+    if (!transaction->txn)
+        rb_raise(cError, "Transaction is already terminated");
 
-        if (transaction->thread != rb_thread_current())
-          rb_raise(cError, "The thread closing the transaction "
-                   "is not the one that opened it");
+    if (transaction->thread != rb_thread_current())
+        rb_raise(cError, "The thread closing the transaction "
+                 "is not the one that opened it");
 
-        // Check nesting
-        VALUE p = environment_active_txn(transaction->env);
-        while (!NIL_P(p) && p != self) {
-                TRANSACTION(p, txn);
-                p = txn->parent;
-        }
-        if (p != self)
-                rb_raise(cError, "Transaction is not active");
+    // ensure the transaction being closed is the active one
+    VALUE p = environment_active_txn(transaction->env);
+    while (!NIL_P(p) && p != self) {
+        TRANSACTION(p, txn);
+        p = txn->parent;
+    }
+    // bail out if the transaction `self` is not the active one
+    if (p != self)
+        rb_raise(cError, "Transaction is not active");
 
-        int ret = 0;
-        if (commit)
-                ret = mdb_txn_commit(transaction->txn);
-        else
-                mdb_txn_abort(transaction->txn);
+    // now actually finish the internal transaction
+    int ret = 0;
+    if (commit)
+        ret = mdb_txn_commit(transaction->txn);
+    else
+        mdb_txn_abort(transaction->txn);
 
-        long i;
-        for (i=0; i<RARRAY_LEN(transaction->cursors); i++) {
-                VALUE cursor = RARRAY_AREF(transaction->cursors, i);
-                cursor_close(cursor);
-        }
-        rb_ary_clear(transaction->cursors);
+    // now eliminate the cursors
+    long i;
+    for (i=0; i<RARRAY_LEN(transaction->cursors); i++) {
+        VALUE cursor = RARRAY_AREF(transaction->cursors, i);
+        cursor_close(cursor);
+    }
+    rb_ary_clear(transaction->cursors);
 
-        // Mark child transactions as closed
-        p = environment_active_txn(transaction->env);
+    /*
+    // eliminate child transactions
+    if (transaction->child) {
+        p = self; // again this is a VALUE
+        Transaction* txn = transaction; // and this is the struct
+
+        // descend into deepest child transaction
+        do {
+            p = txn->child;
+            // this is TRANSACTION minus the declaration
+            Data_Get_Struct(txn->child, Transaction, txn);
+        } while (txn->child);
+
+        // now we ascend back up
         while (p != self) {
-                TRANSACTION(p, txn);
-                txn->txn = 0;
-                p = txn->parent;
+            TRANSACTION(p, txn);
+            txn->txn = 0;
+            p = txn->parent;
         }
-        transaction->txn = 0;
+    }
+    */
+    transaction->txn = 0;
 
-        environment_set_active_txn(transaction->env, transaction->thread, transaction->parent);
+    // no more active read-write transaction; unset the registry
+    if (!(transaction->flags & MDB_RDONLY) && !transaction->parent) {
+        ENVIRONMENT(transaction->env, env);
+        env->rw_txn_thread = NULL;
+    }
 
-        check(ret);
+    // now set the active transaction to the parent, if there is one
+    environment_set_active_txn(transaction->env, transaction->thread,
+                               transaction->parent);
+
+    check(ret);
 }
 
 // Ruby 1.8.7 compatibility
@@ -264,8 +291,17 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
     MDB_txn* txn;
     TxnArgs txn_args;
 
+    VALUE thread  = rb_thread_current();
     VALUE vparent = environment_active_txn(venv);
 
+    Transaction* tparent = NULL;
+    if (vparent && !NIL_P(vparent))
+        Data_Get_Struct(vparent, Transaction, tparent);
+
+    // rb_warn("fart lol");
+
+    // XXX note this is a cursed goto loop that could almost certainly
+    // be rewritten as a do-while
  retry:
     txn = NULL;
 
@@ -277,7 +313,7 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
     txn_args.stop   = 0;
 
     if (flags & MDB_RDONLY) {
-        if (vparent && ((size_t*)vparent)->flags & MDB_RDONLY)
+        if (tparent && tparent->flags & MDB_RDONLY)
             // this is a no-op: put the same actual transaction in a
             // different wrapper struct
             txn = txn_args.parent;
@@ -287,8 +323,15 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
             call_txn_begin(&txn_args);
     }
     else {
-        if (vparent) {
-            venv->rw_txn_thread
+        if (tparent) {
+            // first we have to determine if we're on the same thread
+            // as the parent, which in turn must be the same as the
+            // environment's registry for which thread has the
+            // read-write transaction
+            if (thread != tparent->thread ||
+                thread != environment->rw_txn_thread)
+                rb_raise(cError,
+                         "Attempt to nest transaction on a different thread");
         }
 
         CALL_WITHOUT_GVL(call_txn_begin, &txn_args, stop_txn_begin, &txn_args);
@@ -296,25 +339,35 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
         if (txn_args.stop || !txn) {
             // !txn is when rb_thread_call_without_gvl2
             // returns before calling txn_begin
-            if (txn) txn_args.result = mdb_txn_abort(txn);
+            if (txn) {
+                mdb_txn_abort(txn);
+                txn_args.result = 0;
+            }
 
             //rb_warn("got here lol");
             rb_thread_check_ints();
             goto retry; // in what cases do we get here?
         }
+
+        // set the thread
+        environment->rw_txn_thread = thread;
     }
 
     // this will raise unless result is zero
     check(txn_args.result);
 
     Transaction* transaction;
-    VALUE vtxn = Data_Make_Struct(cTransaction, Transaction, transaction_mark, transaction_free, transaction);
+    VALUE vtxn = Data_Make_Struct(cTransaction, Transaction, transaction_mark,
+                                  transaction_free, transaction);
     transaction->parent  = vparent;
     transaction->env     = venv;
     transaction->txn     = txn;
     transaction->flags   = flags;
     transaction->thread  = rb_thread_current();
     transaction->cursors = rb_ary_new();
+
+    // set the parent's child to self
+    if (tparent) tparent->child = vtxn;
 
     environment_set_active_txn(venv, transaction->thread, vtxn);
 
@@ -323,7 +376,7 @@ static VALUE with_transaction(VALUE venv, VALUE(*fn)(VALUE), VALUE arg, int flag
     VALUE ret = rb_protect(fn, NIL_P(arg) ? vtxn : arg, &exception);
 
     if (exception) {
-        //rb_warn("lol got exception");
+        // rb_warn("lol got exception");
         if (vtxn == environment_active_txn(venv))
             transaction_abort(vtxn);
         rb_jump_tag(exception);

@@ -1,3 +1,3 @@
 module LMDB
-  VERSION = '0.5.3'.freeze
+  VERSION = '0.6'.freeze
 end

@@ -1,0 +1,35 @@
+#+STARTUP: showall hidestars
+* the situtation
+  - lmdb has two kinds of transaction: read-write and read-only
+  - there are two properties associated with transactions:
+    - nesting
+    - multiplicity
+  - *read-write* transactions can nest, but there can only be one stack of read-write transactions per *database*, that is, amongst /all/ threads and all processes attached to the persitent storage.
+  - *read-only* transactions /cannot/ nest (because it's not meaningful for a read-only transaction to nest), but there can be a read-only transaction per thread (and of course multiple threads per process).
+    - (i can't remember if you can have a thread with a read-write *and* read-only transaction going but we can probably assume not)
+  - so therefore we need a way to distinguish between read-write and read-only as well as identify the thread /across processes/ that has the one read-write transaction open.
+* undocumented behaviour
+** ~mdb_txn_begin~
+   - if the environment is read-only and the transaction is read-write, returns ~EACCES~
+   - if there is a parent transaction and the current transaction's flags are ~MDB_RDONLY~ or ~MDB_WRITEMAP~ (?) or ~TXN_BLOCKED~
+     - if the *parent's* transaction is ~MDB_TXN_RDONLY~ (which is the same as ~MDB_RDONLY~), return ~EINVAL~
+       - that's saying "read-only transactions can't be nested"
+     - otherwise, return ~MDB_BAD_TXN~
+       - this is saying "read-only transactions can't be children of read-write parents"
+   - otherwise a few boring scenarios where the function may return ~ENOMEM~
+   - otherwise check ~mdb_cursor_shadow~ or ~mdb_txn_renew0~
+   - XXX does ~mdb_txn_begin~ block when waiting for the read-write??
+* desired behaviour
+** ruby interface
+   - when the ruby programmer opens a read-only transaction within a read-only transaction, this should be a noop
+     - don't push any stack, don't allocate any resources, just do nothing
+   - when the ruby programmer opens a read-only transaction within a read-/write/ transaction, this should raise an exception
+     - in practice there's no harm except that this is more about communicating the right thing to the ruby programmer
+       - do we warn?
+   - problem: there's no way to know (via the lmdb api) if another process has a read-write transaction open
+     - poll?
+       - actually no it probably doesn't matter (the mdb api blocks anyway?)
+       - /actually/ actually, the cursed-ass goto pseudo-loop containing the ~CALL_WITHOUT_GVL~ deals with that
+** internal implementation
+   - a successfully-created read-write transaction has to set ~rw_txn_thread~ to the current thread (unless it is a sub-transaction in which case noop)
+   - when a read-write transaction is committed or aborted, ~rw_txn_thread~ has to be set back to null (unless the transaction has a parent)
