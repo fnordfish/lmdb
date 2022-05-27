@@ -11,7 +11,8 @@ module LMDB
     #      puts "at #{key}: #{value}"
     #    end
     def each
-      maybe_txn true do
+      # maybe_txn true do
+      env.transaction true do
       # env.transaction do
         cursor do |c|
           while i = c.next

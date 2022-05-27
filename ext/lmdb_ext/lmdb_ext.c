@@ -158,13 +158,6 @@ static void transaction_finish(VALUE self, int commit) {
     if (p != self)
         rb_raise(cError, "Transaction is not active");
 
-    // now actually finish the internal transaction
-    int ret = 0;
-    if (commit)
-        ret = mdb_txn_commit(transaction->txn);
-    else
-        mdb_txn_abort(transaction->txn);
-
     // now eliminate the cursors
     long i;
     for (i=0; i<RARRAY_LEN(transaction->cursors); i++) {
@@ -173,7 +166,13 @@ static void transaction_finish(VALUE self, int commit) {
     }
     rb_ary_clear(transaction->cursors);
 
-    /*
+    // now actually finish the internal transaction
+    int ret = 0;
+    if (commit)
+        ret = mdb_txn_commit(transaction->txn);
+    else
+        mdb_txn_abort(transaction->txn);
+
     // eliminate child transactions
     if (transaction->child) {
         p = self; // again this is a VALUE
@@ -193,7 +192,6 @@ static void transaction_finish(VALUE self, int commit) {
             p = txn->parent;
         }
     }
-    */
     transaction->txn = 0;
 
     // no more active read-write transaction; unset the registry
