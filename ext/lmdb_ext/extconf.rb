@@ -5,10 +5,14 @@ $CFLAGS << ' -fdeclspec' if /darwin/.match? RUBY_PLATFORM
 
 # Embed lmdb if we cannot find it
 if enable_config("bundled-lmdb", false) || !(find_header('lmdb.h') && have_library('lmdb', 'mdb_env_create'))
-  $INCFLAGS << " -I$(srcdir)/liblmdb"
+  lmdbpath = "../../vendor/libraries/liblmdb"
+  $INCFLAGS << " -I$(srcdir)/#{lmdbpath}"
   $VPATH ||= []
-  $VPATH << "$(srcdir)/liblmdb"
-  $srcs = Dir.glob("#{$srcdir}/{,liblmdb/}*.c").map {|n| File.basename(n) }
+  $VPATH << "$(srcdir)/#{lmdbpath}"
+  # XXX this is a sketchy, sketchy way to do this
+  $srcs = Dir.glob("#{$srcdir}/{#{lmdbpath}/{mdb,midl}.c,*.c}").map do |n|
+    File.basename(n)
+  end
 end
 
 have_header 'limits.h'

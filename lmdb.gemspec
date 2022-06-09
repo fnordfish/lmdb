@@ -15,7 +15,7 @@ Gem::Specification.new do |s|
   s.authors     = ['Daniel Mendler', 'Dorian Taylor']
   s.extensions  = Dir['ext/**/extconf.rb']
 
-  s.files         = `git ls-files`.split("\n")
+  s.files         = `git ls-files --recurse-submodules -- *`.split("\n")
   s.test_files    = `git ls-files -- spec/*`.split("\n")
   s.require_paths = ['lib']
 
