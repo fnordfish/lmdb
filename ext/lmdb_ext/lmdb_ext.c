@@ -38,21 +38,21 @@ static void check(int code) {
 }
 
 static void transaction_free(Transaction* transaction) {
-        if (transaction->txn && !NIL_P(transaction->txn)) {
-          //int id = (int)mdb_txn_id(transaction->txn);
-          //rb_warn(sprintf("Memory leak: Garbage collecting active transaction %d", id));
-          rb_warn("Memory leak: Garbage collecting active transaction");
-          // transaction_abort(transaction);
-          // mdb_txn_abort(transaction->txn);
-        }
-        free(transaction);
+    if (transaction->txn) {
+        //int id = (int)mdb_txn_id(transaction->txn);
+        //rb_warn(sprintf("Memory leak: Garbage collecting active transaction %d", id));
+        rb_warn("Memory leak: Garbage collecting active transaction");
+        // transaction_abort(transaction);
+        // mdb_txn_abort(transaction->txn);
+    }
+    free(transaction);
 }
 
 static void transaction_mark(Transaction* transaction) {
-        rb_gc_mark(transaction->parent);
-        rb_gc_mark(transaction->child);
-        rb_gc_mark(transaction->env);
-        rb_gc_mark(transaction->cursors);
+    rb_gc_mark(transaction->parent);
+    rb_gc_mark(transaction->child);
+    rb_gc_mark(transaction->env);
+    rb_gc_mark(transaction->cursors);
 }
 
 /**
@@ -197,7 +197,8 @@ static void transaction_finish(VALUE self, int commit) {
     // no more active read-write transaction; unset the registry
     if (!(transaction->flags & MDB_RDONLY) && !transaction->parent) {
         ENVIRONMENT(transaction->env, env);
-        env->rw_txn_thread = NULL;
+        // maybe this should be Qnil, i dunno
+        env->rw_txn_thread = (VALUE)NULL;
     }
 
     // now set the active transaction to the parent, if there is one
@@ -600,47 +601,50 @@ static int environment_options(VALUE key, VALUE value, EnvironmentOptions* optio
  *      end
  */
 static VALUE environment_new(int argc, VALUE *argv, VALUE klass) {
-        VALUE path, option_hash;
+    VALUE path, option_hash;
 
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
-                        argc, argv, "1:", &path, &option_hash);
+    rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                    argc, argv, "1:", &path, &option_hash);
 #else
-        rb_scan_args(argc, argv, "1:", &path, &option_hash);
+    rb_scan_args(argc, argv, "1:", &path, &option_hash);
 #endif
 
-        EnvironmentOptions options = {
-                .flags = MDB_NOTLS,
-                .maxreaders = -1,
-                .maxdbs = 128,
-                .mapsize = 0,
-                .mode = 0755,
-        };
-        if (!NIL_P(option_hash))
-                rb_hash_foreach(option_hash, environment_options, (VALUE)&options);
+    EnvironmentOptions options = {
+        .flags = MDB_NOTLS,
+        .maxreaders = -1,
+        .maxdbs = 128,
+        .mapsize = 0,
+        .mode = 0755,
+    };
+    if (!NIL_P(option_hash))
+        rb_hash_foreach(option_hash, (int (*)(ANYARGS))environment_options,
+                        (VALUE)&options);
 
-        MDB_env* env;
-        check(mdb_env_create(&env));
+    MDB_env* env;
+    check(mdb_env_create(&env));
 
-        Environment* environment;
-        VALUE venv = Data_Make_Struct(cEnvironment, Environment, environment_mark, environment_free, environment);
-        environment->env = env;
-        environment->thread_txn_hash = rb_hash_new();
-        environment->txn_thread_hash = rb_hash_new();
+    Environment* environment;
+    VALUE venv = Data_Make_Struct(cEnvironment, Environment, environment_mark,
+                                  environment_free, environment);
+    environment->env = env;
+    environment->thread_txn_hash = rb_hash_new();
+    environment->txn_thread_hash = rb_hash_new();
 
-        if (options.maxreaders > 0)
-                check(mdb_env_set_maxreaders(env, options.maxreaders));
-        if (options.mapsize > 0)
-                check(mdb_env_set_mapsize(env, options.mapsize));
+    if (options.maxreaders > 0)
+        check(mdb_env_set_maxreaders(env, options.maxreaders));
+    if (options.mapsize > 0)
+        check(mdb_env_set_mapsize(env, options.mapsize));
 
-        check(mdb_env_set_maxdbs(env, options.maxdbs <= 0 ? 1 : options.maxdbs));
-        VALUE expanded_path = rb_file_expand_path(path, Qnil);
-        check(mdb_env_open(env, StringValueCStr(expanded_path), options.flags, options.mode));
+    check(mdb_env_set_maxdbs(env, options.maxdbs <= 0 ? 1 : options.maxdbs));
+    VALUE expanded_path = rb_file_expand_path(path, Qnil);
+    check(mdb_env_open(env, StringValueCStr(expanded_path), options.flags,
+                       options.mode));
 
-        if (rb_block_given_p())
-                return rb_ensure(rb_yield, venv, environment_close, venv);
+    if (rb_block_given_p())
+        return rb_ensure(rb_yield, venv, environment_close, venv);
 
-        return venv;
+    return venv;
 }
 
 /**
@@ -877,32 +881,35 @@ static void database_mark(Database* database) {
  *       transaction or a read-only environment.
  */
 static VALUE environment_database(int argc, VALUE *argv, VALUE self) {
-        ENVIRONMENT(self, environment);
-        if (!active_txn(self))
-                return call_with_transaction(self, self, "database", argc, argv, 0);
+    ENVIRONMENT(self, environment);
+    if (!active_txn(self))
+        return call_with_transaction(self, self, "database", argc, argv, 0);
 
-        VALUE name, option_hash;
+    VALUE name, option_hash;
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS,
-                        argc, argv, "01:", &name, &option_hash);
+    rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS,
+                    argc, argv, "01:", &name, &option_hash);
 #else
-        rb_scan_args(argc, argv, "01:", &name, &option_hash);
+    rb_scan_args(argc, argv, "01:", &name, &option_hash);
 #endif
 
 
-        int flags = 0;
-        if (!NIL_P(option_hash))
-                rb_hash_foreach(option_hash, database_flags, (VALUE)&flags);
+    int flags = 0;
+    if (!NIL_P(option_hash))
+        rb_hash_foreach(option_hash, (int (*)(ANYARGS))database_flags,
+                        (VALUE)&flags);
 
-        MDB_dbi dbi;
-        check(mdb_dbi_open(need_txn(self), NIL_P(name) ? 0 : StringValueCStr(name), flags, &dbi));
+    MDB_dbi dbi;
+    check(mdb_dbi_open(need_txn(self), NIL_P(name) ? 0 : StringValueCStr(name),
+                       flags, &dbi));
 
-        Database* database;
-        VALUE vdb = Data_Make_Struct(cDatabase, Database, database_mark, free, database);
-        database->dbi = dbi;
-        database->env = self;
+    Database* database;
+    VALUE vdb = Data_Make_Struct(cDatabase, Database, database_mark, free,
+                                 database);
+    database->dbi = dbi;
+    database->env = self;
 
-        return vdb;
+    return vdb;
 }
 
 /**
@@ -1064,33 +1071,34 @@ static VALUE database_get(VALUE self, VALUE vkey) {
  *       data.
  */
 static VALUE database_put(int argc, VALUE *argv, VALUE self) {
-        DATABASE(self, database);
-        if (!active_txn(database->env))
-                return call_with_transaction(database->env, self, "put", argc, argv, 0);
+    DATABASE(self, database);
+    if (!active_txn(database->env))
+        return call_with_transaction(database->env, self, "put", argc, argv, 0);
 
-        VALUE vkey, vval, option_hash = Qnil;
+    VALUE vkey, vval, option_hash = Qnil;
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
-                        argc, argv, "20:", &vkey, &vval, &option_hash);
+    rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                    argc, argv, "20:", &vkey, &vval, &option_hash);
 #else
-        rb_scan_args(argc, argv, "20:", &vkey, &vval, &option_hash);
+    rb_scan_args(argc, argv, "20:", &vkey, &vval, &option_hash);
 #endif
 
-        int flags = 0;
-        if (!NIL_P(option_hash))
-                rb_hash_foreach(option_hash, database_put_flags, (VALUE)&flags);
+    int flags = 0;
+    if (!NIL_P(option_hash))
+        rb_hash_foreach(option_hash, (int (*)(ANYARGS))database_put_flags,
+                        (VALUE)&flags);
 
-        vkey = StringValue(vkey);
-        vval = StringValue(vval);
+    vkey = StringValue(vkey);
+    vval = StringValue(vval);
 
-        MDB_val key, value;
-        key.mv_size = RSTRING_LEN(vkey);
-        key.mv_data = RSTRING_PTR(vkey);
-        value.mv_size = RSTRING_LEN(vval);
-        value.mv_data = RSTRING_PTR(vval);
+    MDB_val key, value;
+    key.mv_size = RSTRING_LEN(vkey);
+    key.mv_data = RSTRING_PTR(vkey);
+    value.mv_size = RSTRING_LEN(vval);
+    value.mv_data = RSTRING_PTR(vval);
 
-        check(mdb_put(need_txn(database->env), database->dbi, &key, &value, flags));
-        return Qnil;
+    check(mdb_put(need_txn(database->env), database->dbi, &key, &value, flags));
+    return Qnil;
 }
 
 /**
@@ -1454,31 +1462,32 @@ static VALUE cursor_get(VALUE self) {
  *       data.
  */
 static VALUE cursor_put(int argc, VALUE* argv, VALUE self) {
-        CURSOR(self, cursor);
+    CURSOR(self, cursor);
 
-        VALUE vkey, vval, option_hash;
+    VALUE vkey, vval, option_hash;
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
-                        argc, argv, "2:", &vkey, &vval, &option_hash);
+    rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                    argc, argv, "2:", &vkey, &vval, &option_hash);
 #else
-        rb_scan_args(argc, argv, "2:", &vkey, &vval, &option_hash);
+    rb_scan_args(argc, argv, "2:", &vkey, &vval, &option_hash);
 #endif
 
-        int flags = 0;
-        if (!NIL_P(option_hash))
-                rb_hash_foreach(option_hash, cursor_put_flags, (VALUE)&flags);
+    int flags = 0;
+    if (!NIL_P(option_hash))
+        rb_hash_foreach(option_hash, (int (*)(ANYARGS))cursor_put_flags,
+                        (VALUE)&flags);
 
-        vkey = StringValue(vkey);
-        vval = StringValue(vval);
+    vkey = StringValue(vkey);
+    vval = StringValue(vval);
 
-        MDB_val key, value;
-        key.mv_size = RSTRING_LEN(vkey);
-        key.mv_data = RSTRING_PTR(vkey);
-        value.mv_size = RSTRING_LEN(vval);
-        value.mv_data = RSTRING_PTR(vval);
+    MDB_val key, value;
+    key.mv_size = RSTRING_LEN(vkey);
+    key.mv_data = RSTRING_PTR(vkey);
+    value.mv_size = RSTRING_LEN(vval);
+    value.mv_data = RSTRING_PTR(vval);
 
-        check(mdb_cursor_put(cursor->cur, &key, &value, flags));
-        return Qnil;
+    check(mdb_cursor_put(cursor->cur, &key, &value, flags));
+    return Qnil;
 }
 
 #define METHOD cursor_delete_flags
@@ -1496,22 +1505,23 @@ static VALUE cursor_put(int argc, VALUE* argv, VALUE self) {
  *        if the database was opened with +:dupsort+.
  */
 static VALUE cursor_delete(int argc, VALUE *argv, VALUE self) {
-        CURSOR(self, cursor);
+    CURSOR(self, cursor);
 
-        VALUE option_hash;
+    VALUE option_hash;
 #ifdef RB_SCAN_ARGS_KEYWORDS
-        rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
-                        argc, argv, ":", &option_hash);
+    rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS,
+                    argc, argv, ":", &option_hash);
 #else
-        rb_scan_args(argc, argv, ":", &option_hash);
+    rb_scan_args(argc, argv, ":", &option_hash);
 #endif
 
-        int flags = 0;
-        if (!NIL_P(option_hash))
-                rb_hash_foreach(option_hash, cursor_delete_flags, (VALUE)&flags);
+    int flags = 0;
+    if (!NIL_P(option_hash))
+        rb_hash_foreach(option_hash, (int (*)(ANYARGS))cursor_delete_flags,
+                        (VALUE)&flags);
 
-        check(mdb_cursor_del(cursor->cur, flags));
-        return Qnil;
+    check(mdb_cursor_del(cursor->cur, flags));
+    return Qnil;
 }
 
 /**

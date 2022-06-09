@@ -9,10 +9,10 @@ Gem::Specification.new do |s|
   s.date        = Date.today.to_s
   s.licenses    = ['MIT']
   s.summary     = 'Ruby bindings to Lightning MDB'
-  s.email       = 'mail@daniel-mendler.de'
-  s.homepage    = 'https://github.com/minad/lmdb'
+  s.email       = 'code@doriantaylor.com'
+  s.homepage    = 'https://github.com/doriantaylor/rb-lmdb'
   s.description = 'lmdb is a Ruby binding to OpenLDAP Lightning MDB.'
-  s.authors     = ['Daniel Mendler']
+  s.authors     = ['Daniel Mendler', 'Dorian Taylor']
   s.extensions  = Dir['ext/**/extconf.rb']
 
   s.files         = `git ls-files`.split("\n")
