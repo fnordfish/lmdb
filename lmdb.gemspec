@@ -1,3 +1,4 @@
+
 # -*- encoding: utf-8 -*-
 require File.dirname(__FILE__) + '/lib/lmdb/version'
 require 'date'
@@ -19,9 +20,10 @@ Gem::Specification.new do |s|
   s.test_files    = `git ls-files -- spec/*`.split("\n")
   s.require_paths = ['lib']
 
-  s.required_ruby_version = ">= 2.4"
-  s.add_development_dependency 'rake', "~> 13.0"
-  s.add_development_dependency 'rake-compiler', '~> 1.1'
-  s.add_development_dependency 'rspec', "~> 3.0"
-  s.add_development_dependency 'ruby_memcheck', "~> 1.0"
+  s.required_ruby_version = '>= 2.7'
+
+  s.add_development_dependency 'rake', '~> 13'
+  s.add_development_dependency 'rake-compiler', '~> 1.2'
+  s.add_development_dependency 'rspec', '~> 3'
+  s.add_development_dependency 'ruby_memcheck', '~> 2'
 end
