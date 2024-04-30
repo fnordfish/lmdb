@@ -1,6 +1,6 @@
 require 'mkmf'
 
-$CFLAGS = '-std=c99 -Wall -g'
+$CFLAGS << ' -std=c99 -Wall -g '
 $CFLAGS << ' -fdeclspec' if /darwin/.match? RUBY_PLATFORM
 
 # Embed lmdb if we cannot find it
